@@ -1,0 +1,278 @@
+Spark Notes:
+-------------
+
+ITVERSITY:
+----------
+
+spark-shell --master yarn --conf spark.ui.port=12345(any number b/w 10000 to 65535)
+
+//To Create RDD from HDFS (textfile)
+val orders = sc.textFile("/public/retail_db/orders")
+
+val particularOrder = orders.filter( o => o._1 == 4)
+
+//To access elements in RDD
+
+orders.first
+orders.take(10).foreach(println)
+
+//Create RDD from Local File System
+
+Here fully qualified name until file should be specified
+val productsRaw = scala.io.Source.fromFile("/data/retail_db/products/part-00000").getLines.toList
+
+productsRaw is a List, we need to convert it to rdd
+
+val productsRDD = sc.parallelize(productsRaw)
+
+//sc.parallelize is used to convert any scala collection to rdd
+
+//To Create DFs from HDFS (different file formats)
+
+Parquet, ORC and Json are supported by default, for avro you need to plug-in external dependencies.
+
+val ordersDF = sqlContext.read.json("hdfs_path")
+
+or 
+
+val ordersDF = sqlContext.load("hdfs_path","file_format(json,parquet,orc)")
+
+
+Transformations and Actions Examples:
+--------------------------------------
+
+Some common transformations we use commonly to meet business requirement:
+
+"map, flatmap, mappartitions, mappartitionswithindex" for row level transformations
+"filter" to filter data
+"union, intersection and distinct" for set operations
+"reducebykey, aggregatebykey,groupByKey" for aggregations in Transformations
+"reduce, countByKey, count" for aggregations in Actions
+"sortbykey" for sorting the data
+"groupbykey" for ranking
+"join" for joining datasets
+
+Joins Example:
+--------------
+
+val orders = sc.textFile("/public/retail_db/orders")
+val orderItems = sc.textFile("/public/retail_db/order_items")
+
+val orderMap = orders.map( o => (o.split(",")(0).toInt, o.split(",")(1).substring(0,10).replace("-","").toInt))
+val orderItemsMap = orderItems.map( oi => (oi.split(",")(1).toInt,oi.split(",")(4).toDouble))
+
+val orderJoin = orderMap.join(orderItemsMap)
+orderJoin.take(10).foreach(println)
+
+//Get all orders which do not have corresponding entries in order_items table - Leftouterjoin example
+
+val orders = sc.textFile("/public/retail_db/orders")
+val orderItems = sc.textFile("/public/retail_db/order_items")
+
+val ordersMap = orders.map( {
+o => o.split(",")
+(o(0).toInt,o)
+} )
+
+val orderItemsMap = orderItems.map({
+oi=>oi.split(",")
+(oi(1).toInt,oi)
+})
+
+orderItemsMap.take(10).foreach(println)
+
+val orderLeftOuterJoin = ordersMap.leftOuterJoin(orderItemsMap)
+
+val orderLeftOuterFilterJoin = orderLeftOuterJoin.filter({
+of=>of._2._2 == None
+})
+
+orderLeftOuterFilterJoin.count
+
+orderLeftOuterFilterJoin.take(10).foreach(println)
+
+val orderWithNoOrderItems = orderLeftOuterFilterJoin.map(o=>o._2._1).take(10).foreach(println)
+
+Aggregation Concepts:
+----------------------
+
+//Aggregations using "Actions"
+
+val orders = sc.textFile("/public/retail_db/orders")
+val orderMap = orders.map(o=>(o.split(",")(3),"")).countByKey.foreach(println)
+
+Note: reduce in Actions cannot be used on a Key, it is used for global aggregation like sum, min, max, etc
+
+val orderItems = sc.textFile("/public/retail_db_order_items")
+
+//Compute revenue for the month of 2013-09, since this is a global revenue you should use reduce from Actions
+
+
+//How to get Max revenue 
+val orderItems = sc.textFile("/public/retail_db/order_items")
+val ordersItemsRevenue = orderItems.map(oi=>oi.split(",")(4).toFloat)
+ordersItemsRevenue.reduce({(total,revenue) => total + revenue})
+
+val orderItemsMaxRevenue = ordersItemsRevenue.reduce(
+(max,revenue) => 
+if(max < revenue) revenue else max
+)
+
+//How to get Min revenue 
+val orderItems = sc.textFile("/public/retail_db/order_items")
+val ordersItemsRevenue = orderItems.map(oi=>oi.split(",")(4).toFloat)
+ordersItemsRevenue.reduce({(total,revenue) => total + revenue})
+
+val orderItemsMaxRevenue = ordersItemsRevenue.reduce(
+(min,revenue) => 
+if(min < revenue) min else revenue
+)
+
+groupByKey example:
+----------------------
+//Get revnue per order_id
+
+val orderItems = sc.textFile("/public/retail_db/order_items")
+
+val orderItemsMap = orderItems.map(o=>(o.split(",")(1).toInt,o.split(",")(4).toFloat))
+val orderItemsRevenueGBK = orderItemsMap.groupByKey()
+val orderItemsRevenue = orderItemsRevenueGBK.map(o=>(o._1,o._2.toList.sum))
+
+//Get data in descending order by order_item_subtotal for each order_id
+
+val orderItems = sc.textFile("/public/retail_db/order_items")
+val orderItemsMap = orderItems.map(o=>(o.split(",")(1).toInt,o.split(",")(4).toFloat))
+val orderItemsGBK = orderItemsMap.groupByKey()
+val orderItemsSorted = orderItemsGBK.flatMap(o => o._2.toList.sortBy(x => -x).map(k => (o._1,k)))
+
+reduceByKey Example:
+--------------------
+
+val orderItems = sc.textFile("/public/retail_db/order_items")
+val orderItemsMap = orderItems.map(o=>(o.split(",")(1).toInt,o.split(",")(4).toFloat))
+val orderTotalRevenue = orderItemsMap.reduceByKey((x,y)=>x+y)
+
+val minRevenuePerOrderId = orderItemsMap.reduceByKey((x,y) => if(x < y) x else y)
+
+aggregrateByKey Example:
+------------------------
+
+
+sortByKey Example:
+-------------------
+val products = sc.textFile("/public/retail_db/products")
+
+val productsMap = products.map(p=> (p.split(",")(1),p))
+
+val productSortedByCategoryId = productsMap.sortByKey(false)
+
+//sortByKey for composite key example
+
+val products = sc.textFile("/public/retail_db/products")
+
+val productsMap = products.filter(x=>x.split(",")(4)!="").map(p=> ((p.split(",")(1).toInt,-p.split(",")(4).toFloat),p))
+
+val productSortedByCategoryId = productsMap.sortByKey()
+
+val productsFinalSort = productSortedByCategoryId.map(x=>(x._2))
+productsFinalSort.take(10).foreach(println)
+
+take and takeOrdered example:
+------------------------------
+
+val products = sc.textFile("/public/retail_db/products")
+
+val productsSort = products.filter(x=>x.split(",")(4)!="").map(p=>(p.split(",")(4).toFloat,p)).sortByKey(false).take(5).foreach(println)
+
+val productsSortTakeOrdered = products.filter(x=>x.split(",")(4)!="").takeOrdered(10)(Ordering[Float].reverse.on(p=>p.split(",")(4).toFloat)).foreach(println)
+
+//Ranking - get top N priced products within each product category 
+
+val products = sc.textFile("/public/retail_db/products")
+val productsFilter = products.filter(p=>p.split(",")(4)!="").map(p=>(p.split(",")(1).toInt,p))
+val productsGBK = productsFilter.groupByKey()
+
+
+Ranking example:
+----------------
+
+
+
+Set Operations Example:
+------------------------
+
+//Get all unique customers who placed orders in 2013 Aug and 2013 Sep
+val orders = sc.textFile("/public/retail_db/orders")
+val ordersAug = orders.filter(o=>o.split(",")(1).contains("2013-08")).map(o=>o.split(",")(2).toInt).distinct
+val ordersSep = orders.filter(o=>o.split(",")(1).contains("2013-09")).map(o=>o.split(",")(2).toInt).distinct
+val ordersIntersect = ordersAug.intersection(ordersSep)
+
+//Get all unique customers who placed orders in 2013 Aug or 2013 Sep
+val orders = sc.textFile("/public/retail_db/orders")
+val ordersAug = orders.filter(o=>o.split(",")(1).contains("2013-08")).map(o=>o.split(",")(2).toInt).distinct
+val ordersSep = orders.filter(o=>o.split(",")(1).contains("2013-09")).map(o=>o.split(",")(2).toInt).distinct
+val ordersUnion = ordersAug.union(ordersSep).distinct
+
+//Get all customers who placed orders in 2013 Aug but not in 2013 Sep
+val orders = sc.textFile("/public/retail_db/orders")
+val ordersAug = orders.filter(o=>o.split(",")(1).contains("2013-08")).map(o=>o.split(",")(2).toInt).distinct
+val ordersSep = orders.filter(o=>o.split(",")(1).contains("2013-09")).map(o=>o.split(",")(2).toInt).distinct
+val ordersMinus = ordersAug.subtract(ordersSep)
+
+Saving RDD to HDFS using countByKey and tab seperated:
+------------------------------------------------------
+val orders = sc.textFile("/public/retail_db/orders")
+val orderStatus = orders.map(o=>(o.split(",")(3),1)).countByKey
+
+/*
+Here countByKey returns scala map collection, so you cant save it to HDFS directly, it has to be changed from scala map to List and then list to rdd and then save to hdfs
+or
+use reduceByKey instead of countByKey to get RDD
+*/
+
+val x = sc.parallelize(orderStatus.toList)
+val y = x.map(rec=>rec._1 + "\t" + rec._2.toInt)
+y.saveAsTextFile("/user/chaitanyapolipalli/SavingFile_countByKey/")
+
+Saving RDD to HDFS using reduceByKey and tab seperated:
+-------------------------------------------------------
+
+val orders = sc.textFile("/public/retail_db/orders")
+val orderStatus = orders.map(o=>(o.split(",")(3),1)).reduceByKey
+val ordersReduce = orderStatus.reduceByKey((x,y) => x+y)
+val ordersTabSeperated = ordersReduce.map(x=>x._1 + "\t" +x._2.toInt)
+ordersTabSeperated.saveAsTextFile("/user/chaitanyapolipalli/SavingFile_reduceByKey/")
+
+Saving RDD to HDFS using compression:
+--------------------------------------
+val orders = sc.textFile("/public/retail_db/orders")
+val orderStatus = orders.map(o=>(o.split(",")(3),1))
+val ordersReduce = orderStatus.reduceByKey((x,y) => x+y)
+val ordersTabSeperated = ordersReduce.map(x=>x._1 + "\t" +x._2.toInt)
+ordersTabSeperated.saveAsTextFile("/user/chaitanyapolipalli/SavingFile_reduceByKey_Compression/",classOf[org.apache.hadoop.io.compress.SnappyCodec])
+
+
+Writing data into different file formats:
+-----------------------------------------
+val ordersDF = sqlContext.read.json("/public/retail_db_json/orders") or val ordersDF = sqlContext.load("/public/retail_db_json/orders","json")
+val ordersSavingAsParquet = ordersDF.write.parquet("/user/chaitanyapolipalli/SavingFileAsParquet")
+or
+val ordersSavingAsParquet = ordersDF.save("/user/chaitanyapolipalli/SavingFileAsParquet1","parquet")
+
+Problem Statement Exercise:
+----------------------------
+val orders = sc.textFile("/public/retail_db/orders")
+val orderitems = sc.textFile("/public/retail_db/order_items")
+val productsRaw = scala.io.Source.fromFile("/home/chaitanyapolipalli/retail_db/products/part-00000").getLines.toList
+val productsRdd = sc.parallelize(productsRaw)
+val ordersStatusFiltered = orders.filter(o=>o.split(",")(3)=="COMPLETE" || o.split(",")(3)=="CLOSED")
+
+val ordersRequiredFields = ordersStatusFiltered.map(o=>(o.split(",")(0).toInt,o.split(",")(1).substring(0,10)))
+val orderItemsRequiredFields = orderitems.map(oi=>(oi.split(",")(1).toInt,oi))
+val productsRequiredFields = productsRdd.map(p=>(p.split(",")(0).toInt,p.split(",")(2)))
+
+val orders_orderitems_join = ordersRequiredFields.join(orderItemsRequiredFields)
+val orderitems_products_join = orderItemsRequiredFields.join(productsRequiredFields)
+
+
+
