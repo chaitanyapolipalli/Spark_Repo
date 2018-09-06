@@ -1,0 +1,169 @@
+#############
+###SPARK 2###
+#############
+
+#Examples from Definitive guide
+
+val flightData = spark.read.option("inferSchema","true").option("header","true").csv("/user/chaitanyapolipalli/flight-data/csv/2010-summary.csv")
+
+#sort
+
+val flightDataSort = flightData.sort("count").show //ascending order
+val flightDataSortDesc = flightData.sort($"count".desc).show //descending order
+
+spark.conf.set("spark.sql.shuffle.partitions","5")
+
+#Registering data frame as table or view
+flightData.createOrReplaceTempView("flight_data") 
+val sqlWay = spark.sql("select DEST_COUNTRY_NAME, count(1) from flight_data group by DEST_COUNTRY_NAME")
+
+val dfWay = flightData.groupBy("DEST_COUNTRY_NAME").count()
+
+#Using max function
+
+spark.sql("select max(count) from flight_data").take(1)
+
+flightData.select(max("count")).take(1)
+
+#Find the top five destination countries in the data
+
+spark.sql("select DEST_COUNTRY_NAME, sum(count) as destination_total from flight_data group by DEST_COUNTRY_NAME order by destination_total desc limit 5").show
+
+flightData.groupBy("DEST_COUNTRY_NAME").sum("count").withColumnRenamed("sum(count)","destination_total").sort($"destination_total".desc).limit(5).show
+
+or 
+
+flightData.groupBy("DEST_COUNTRY_NAME").sum("count").withColumnRenamed("sum(count)","destination_total").sort(desc("destination_total")).limit(5).show
+
+#Case Class Example
+
+case class Flight(DEST_COUNTRY_NAME: String,ORIGIN_COUNTRY_NAME: String,count: BigInt)
+
+val flightsDF = spark.read.parquet("/user/chaitanyapolipalli/flight-data/parquet/2010-summary.parquet/")
+
+val flights = flightsDF.as[Flight]
+
+#How to create dataframes on the fly
+import org.apache.spark.sql.Row
+import org.apache.spark.sql.types.{StructField, StructType, StringType, LongType}
+
+val myManualSchema = new StructType(Array(new StructField("some", StringType, true),new StructField("col", StringType, true),new StructField("names", LongType, false)))
+
+val myRows = Seq(Row("Hello", null, 1L))
+val myRDD = spark.sparkContext.parallelize(myRows)
+val myDf = spark.createDataFrame(myRDD, myManualSchema)
+
+myDf.show()
+
+#Examples of 'select' and 'selectExpr' methods
+
+df.select("DEST_COUNTRY_NAME").show(2)
+
+You can select multiple columns by using the same style of query, just add more column name strings to your select method call:
+df.select("DEST_COUNTRY_NAME", "ORIGIN_COUNTRY_NAME").show(2)
+
+#Multiple ways of printing column
+
+import org.apache.spark.sql.functions.{expr, col, column}
+
+df.select(
+	df.col("DEST_COUNTRY_NAME"),
+	col("DEST_COUNTRY_NAME"),
+	column("DEST_COUNTRY_NAME"),
+	'DEST_COUNTRY_NAME,
+	$"DEST_COUNTRY_NAME",
+	expr("DEST_COUNTRY_NAME"))
+.show(2)
+
+#One common error is attempting to mix Column objects and strings. For example, the following code will result in a compiler error:
+
+df.select(col("DEST_COUNTRY_NAME"), "DEST_COUNTRY_NAME")
+
+#As we’ve seen thus far, expr is the most flexible reference that we can use. It can refer to a plain column or a string manipulation of a column. To illustrate, let’s change the column name, and then change it back by using the AS keyword and then the alias method on the column:
+
+df.select(expr("DEST_COUNTRY_NAME AS destination")).show(2)
+
+#This changes the column name to “destination.” You can further manipulate the result of your expression as another expression:
+
+df.select(expr("DEST_COUNTRY_NAME as destination").alias("DEST_COUNTRY_NAME")).show(2)
+
+#The preceding operation changes the column name back to its original name.Because select followed by a series of expr is such a common pattern, Spark has a shorthand for doing this efficiently: selectExpr. This is probably the most convenient interface for everyday use:
+
+df.selectExpr("DEST_COUNTRY_NAME as newColumnName", "DEST_COUNTRY_NAME").show(2)
+
+#This opens up the true power of Spark. We can treat selectExpr as a simple way to build up complex expressions that create new DataFrames. In fact, we can add any valid non-aggregating SQL statement, and as long as the columns resolve, it will be valid! Here’s a simple example that adds a new column withinCountry to our DataFrame that specifies whether the destination and origin are the same:
+
+df.selectExpr("*","(DEST_COUNTRY_NAME = ORIGIN_COUNTRY_NAME) as withinCountry").show(2)
+
+#With select expression, we can also specify aggregations over the entire DataFrame by taking advantage of the functions that we have. These look just like what we have been showing so far:
+
+df.selectExpr("avg(count)", "count(distinct(DEST_COUNTRY_NAME))").show
+
+#Sometimes, we need to pass explicit values into Spark that are just a value (rather than a new column). This might be a constant value or something we’ll need to compare to later on.The way we do this is through literals. This is basically a translation from a given programming language’s literal value to one that Spark understands. Literals are expressions and you can use them in the same way: 
+
+import org.apache.spark.sql.functions.lit
+df.select(expr("*"), lit(1).as("One")).show(2)
+
+#There’s also a more formal way of adding a new column to a DataFrame, and that’s by using the withColumn method on our DataFrame. For example, let’s add a column that just adds the number one as a column:
+
+df.withColumn("numberOne", lit(1)).show(2)
+df.withColumn("withInCountry",expr("ORIGIN_COUNTRY_NAME == DEST_COUNTRY_NAME")).show
+
+#Renaming columns
+df.withColumnRenamed("DEST_COUNTRY_NAME", "dest").show
+
+#Escaping column names appropriately. In Spark, we do this by using backtick(`) characters.In this example, however, we need to use backticks because we’re referencing a column in an expression:
+val dfWithLongColName = df.withColumn("This Long Column-Name",expr("ORIGIN_COUNTRY_NAME"))
+dfWithLongColName.selectExpr("`This Long Column-Name`","`This Long Column-Name` as `new col`").show(2)
+
+#By default Spark is case insensitive; however, you can make Spark case sensitive by setting the configuration:
+
+set spark.sql.caseSensitive true
+
+#Removing columns
+df.drop("ORIGIN_COUNTRY_NAME")
+dfWithLongColName.drop("ORIGIN_COUNTRY_NAME", "DEST_COUNTRY_NAME")
+
+#Changing column type 
+df.withColumn("count2", col("count").cast("long"))
+
+#Filtering rows - below commands will yield same results
+df.filter(col("count") < 2).show(2)
+df.where("count < 2").show(2)
+
+#Instinctually, you might want to put multiple filters into the same expression. Although this is possible,it is not always useful, because Spark automatically performs all filtering operations at the same time regardless of the filter ordering. This means that if you want to specify multiple AND filters, just chain them sequentially and let Spark handle the rest:
+#In Scala, you must use the =!= operator so that you don’t just compare the unevaluated column expression to a string but instead to the evaluated one:
+df.where(col("count") < 2).where(col("ORIGIN_COUNTRY_NAME") =!= "Croatia").show(2)
+
+
+#Getting distinct/unique rows
+df.select("ORIGIN_COUNTRY_NAME", "DEST_COUNTRY_NAME").distinct().count()
+df.select("ORIGIN_COUNTRY_NAME").distinct().count()
+
+#When we sort the values in a DataFrame, we always want to sort with either the largest or smallest values at the top of a DataFrame. There are two equivalent operations to do this sort and orderBy that work the exact same way. They accept both column expressions and strings as well as multiple columns. The default is to sort in ascending order:
+
+df.sort("count").show(5)
+df.orderBy("count", "DEST_COUNTRY_NAME").show(5)
+df.orderBy(col("count"), col("DEST_COUNTRY_NAME")).show(5)
+
+#To more explicitly specify sort direction, you need to use the asc and desc functions if operating on a column. These allow you to specify the order in which a given column should be sorted:
+
+df.orderBy(expr("count desc")).show(2)
+df.orderBy(desc("count"), asc("DEST_COUNTRY_NAME")).show(2)
+
+#For optimization purposes, it’s sometimes advisable to sort within each partition before another set of transformations. You can use the sortWithinPartitions method to do this:
+
+spark.read.format("json").load("/data/flight-data/json/*-summary.json").sortWithinPartitions("count")
+
+#Get number of Repartitions:
+df.rdd.getNumPartitions
+
+#Repartition on specific column
+df.repartition(col("DEST_COUNTRY_NAME"))
+
+#Repartition with specific number on a specific column
+df.repartition(5, col("DEST_COUNTRY_NAME"))
+
+#Coalesce
+df.repartition(5, col("DEST_COUNTRY_NAME")).coalesce(2)
+
