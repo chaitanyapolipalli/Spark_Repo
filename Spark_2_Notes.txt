@@ -153,7 +153,7 @@ df.orderBy(desc("count"), asc("DEST_COUNTRY_NAME")).show(2)
 
 #For optimization purposes, it’s sometimes advisable to sort within each partition before another set of transformations. You can use the sortWithinPartitions method to do this:
 
-spark.read.format("json").load("/data/flight-data/json/*-summary.json").sortWithinPartitions("count")
+spark.read.json("/data/flight-data/json/*-summary.json").sortWithinPartitions("count")
 
 #Get number of Repartitions:
 df.rdd.getNumPartitions
@@ -167,3 +167,176 @@ df.repartition(5, col("DEST_COUNTRY_NAME"))
 #Coalesce
 df.repartition(5, col("DEST_COUNTRY_NAME")).coalesce(2)
 
+/*Functions on Booleans*/
+#Filter condition example
+val df = spark.read.format("csv").option("inferSchema","true").option("header","true").load("/user/chaitanyapolipalli/retail-data/by-day/2010-12-01.csv")
+
+df.where(col("InvoiceNo").equalTo(536365)).select("InvoiceNo","Description").show(false)
+or 
+df.where(col("InvoiceNo") === 536365).select("InvoiceNo", "Description").show(false)
+or
+df.where("InvoiceNo = 536365").show(false)
+
+#Complex filter example
+val priceFilter = col("UnitPrice") > 600
+val descripFilter = col("Description").contains("POSTAGE")
+df.where(col("StockCode").isin("DOT")).where(priceFilter.or(descripFilter)).show()
+
+-- in SQL
+SELECT * FROM dfTable WHERE StockCode in ("DOT") AND(UnitPrice > 600 OR instr(Description, "POSTAGE") >= 1)
+
+or
+
+val DOTCodeFilter = col("StockCode") === "DOT"
+val priceFilter = col("UnitPrice") > 600
+val descripFilter = col("Description").contains("POSTAGE")
+df.withColumn("isExpensive", DOTCodeFilter.and(priceFilter.or(descripFilter))).where("isExpensive").select("unitPrice", "isExpensive").show(false)
+
+-- in SQL
+SELECT UnitPrice, (StockCode = 'DOT' AND
+(UnitPrice > 600 OR instr(Description, "POSTAGE") >= 1)) as isExpensive
+FROM dfTable
+WHERE (StockCode = 'DOT' AND
+(UnitPrice > 600 OR instr(Description, "POSTAGE") >= 1))
+
+
+#One “gotcha” that can come up is if you’re working with null data when creating Boolean expressions. If there is a null in your data, you’ll need to treat things a bit differently. Here’s how you can ensure that you perform a null-safe equivalence test:
+
+df.where(col("Description").eqNullSafe("hello")).show()
+
+/*Functions on Numbers*/
+#numerical function 'pow' function example
+
+val fabricatedQuantity = pow(col("Quantity") * col("UnitPrice"),2) + 5
+df.select(expr("CustomerId"), fabricatedQuantity.alias("realQuantity")).show(2)
+
+#The round function rounds up if you’re exactly in between two numbers. You can round down by using the bround:
+df.select(round(lit("2.5")), bround(lit("2.5"))).show(2)
+
+#Another common task is to compute summary statistics for a column or set of columns. We can use the describe method to achieve exactly this. This will take all numeric columns and calculate the count, mean, standard deviation, min, and max.
+
+df.describe().show()
+
+#As a last note, we can also add a unique ID to each row by using the function monotonically_increasing_id. This function generates a unique value for each row, starting with 0:
+df.select(monotonically_increasing_id()).show(2)
+
+/*Functions on Strings*/
+#The initcap function will capitalize every word in a given string when that word is separated from another by a space
+df.select(initcap(col("Description"))).show(2, false)
+
+df.select(col("Description"),lower(col("Description")),upper(lower(col("Description")))).show(2)
+
+#Another trivial task is adding or removing spaces around a string. You can do this by using lpad, ltrim, rpad and rtrim, trim:
+#Note that if lpad or rpad takes a number less than the length of the string, it will always remove values from the right side of the string.
+df.select(
+ltrim(lit(" HELLO ")).as("ltrim"),
+rtrim(lit(" HELLO ")).as("rtrim"),
+trim(lit(" HELLO ")).as("trim"),
+lpad(lit("HELLO"), 3, " ").as("lp"),
+rpad(lit("HELLO"), 10, " ").as("rp")).show(2)
+
+/*Regular Expressions*/
+
+val simpleColors = Seq("black", "white", "red", "green", "blue")
+val regexString = simpleColors.map(_.toUpperCase).mkString("|")
+// the | signifies `OR` in regular expression syntax
+df.select(regexp_replace(col("Description"), regexString, "COLOR").alias("color_clean"),col("Description")).show(false)
+
+#Another task might be to replace given characters with other characters. Building this as a regular expression could be tedious, so Spark also provides the translate function to replace these values. This is done at the character level and will replace all instances of a character with the indexed character in the replacement string:
+
+df.select(translate(col("Description"), "LEET", "1337"), col("Description")).show(2)
+
+#regexp_extract example
+val regexString = simpleColors.map(_.toUpperCase).mkString("(", "|", ")")
+// the | signifies OR in regular expression syntax
+df.select(regexp_extract(col("Description"), regexString, 1).alias("color_clean"),col("Description")).show(2)
+
+#contains example
+val containsBlack = col("Description").contains("BLACK")
+val containsWhite = col("DESCRIPTION").contains("WHITE")
+df.withColumn("hasSimpleColor", containsBlack.or(containsWhite)).where("hasSimpleColor").select("Description").show(3, false)
+
+/*Dates Examples*/
+val dateDF = spark.range(10).withColumn("today", current_date()).withColumn("now", current_timestamp())dateDF.createOrReplaceTempView("dateTable")
+
+#add 5 days and subtract five days
+dateDF.select(date_sub(col("today"), 5), date_add(col("today"), 5)).show()
+
+#difference between months and days
+dateDF.withColumn("week_ago", date_sub(col("today"), 7)).select(datediff(col("today"), col("week_ago"))).show()
+dateDF.select(to_date(lit("2016-01-01")).alias("start"),to_date(lit("2017-05-22")).alias("end")).select(months_between(col("end"), col("start"))).show()
+
+#The to_date function allows you to convert a string to a date, optionally with a specified format. to_date (optionally requires a format) and to_timestamp (always requires a format) examples
+
+#to_date example
+val dateFormat = "yyyy-dd-MM"
+val cleanDateDF = spark.range(1).select(to_date(lit("2017-12-11"), dateFormat).alias("date"),to_date(lit("2017-20-12"), dateFormat).alias("date2"))
+
+cleanDateDF.createOrReplaceTempView("dateTable2")
+
+#to_timestamp example
+cleanDateDF.select(to_timestamp(col("date"), dateFormat)).show()
+
+# "drop" function. The simplest function is drop, which removes rows that contain nulls. The default is to drop any row in which any value is null:
+#Specifying "any" as an argument drops a row if any of the values are null. Using “all” drops the row only if all values are null or NaN for that row:
+
+df.na.drop("any") 
+df.na.drop("all") 
+
+#We can also apply this to certain sets of columns by passing in an array of columns:
+
+df.na.drop("all", Seq("StockCode", "InvoiceNo"))
+
+# "fill" example. Using the fill function, you can fill one or more columns with a set of values. This can be done by specifying a map—that is a particular value and a set of columns. For example, to fill all null values in columns of type String, you might specify the following: 
+df.na.fill("All Null values become this string")
+#We could do the same for columns of type Integer by using df.na.fill(5:Integer), or for Doubles
+df.na.fill(5:Double). 
+
+#To specify columns, we just pass in an array of column names like we did in the previous example:
+
+df.na.fill(5, Seq("StockCode", "InvoiceNo"))
+
+#We can also do this with with a Scala Map, where the key is the column name and the value is the value we would like to use to fill null values:
+
+val fillColValues = Map("StockCode" -> 5, "Description" -> "No Value")
+df.na.fill(fillColValues)
+
+# "replace" example. In addition to replacing null values like we did with drop and fill, there are more flexible options that you can use with more than just null values. Probably the most common use case is to replace all values in a certain column according to their current value. The only requirement is that this value be the same type as the original value:
+
+df.na.replace("Description", Map("" -> "UNKNOWN"))
+
+
+/*Working with Complex Types*/
+
+# "Structs" Example
+
+#You can think of structs as DataFrames within DataFrames. A worked example will illustrate this more clearly. We can create a struct by wrapping a set of columns in parenthesis in a query:
+df.selectExpr("(Description, InvoiceNo) as complex", "*")
+df.selectExpr("struct(Description, InvoiceNo) as complex", "*")
+
+val complexDF = df.select(struct("Description", "InvoiceNo").alias("complex"))
+complexDF.createOrReplaceTempView("complexDF")
+
+# We now have a DataFrame with a column complex. We can query it just as we might another DataFrame, the only difference is that we use a dot syntax to do so, or the column method getField:
+complexDF.select("complex.Description")
+complexDF.select(col("complex").getField("Description"))
+
+#We can also query all values in the struct by using *. This brings up all the columns to the top-level DataFrame:
+complexDF.select("complex.*")
+
+# "array" example. To define arrays, let’s work through a use case. With our current data, our objective is to take every single word in our Description column and convert that into a row in our DataFrame. The first task is to turn our Description column into a complex type, an array.
+
+#We do this by using the split function and specify the delimiter:
+
+df.select(split(col("Description"), " ")).show(2)
+
+# "explode" example. The explode function takes a column that consists of arrays and creates one row (with the rest of the values duplicated) per value in the array.
+
+df.withColumn("splitted", split(col("Description"), " ")).withColumn("exploded", explode(col("splitted"))).select("Description", "InvoiceNo", "exploded").show(2)
+
+# "Map" example
+
+df.select(map(col("Description"), col("InvoiceNo")).alias("complex_map")).show(false)
+
+#You can also explode map types, which will turn them into columns: 
+df.select(map(col("Description"), col("InvoiceNo")).alias("complex_map")).selectExpr("explode(complex_map)").show(false)
