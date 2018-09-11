@@ -340,3 +340,90 @@ df.select(map(col("Description"), col("InvoiceNo")).alias("complex_map")).show(f
 
 #You can also explode map types, which will turn them into columns: 
 df.select(map(col("Description"), col("InvoiceNo")).alias("complex_map")).selectExpr("explode(complex_map)").show(false)
+
+/*Working with JSON types*/
+
+#You can use the get_json_object to inline query a JSON object, be it a dictionary or array. You can use json_tuple if this object has only one level of nesting:
+val jsonDF = spark.range(1).selectExpr("""'{"myJSONKey" : {"myJSONValue" : [1, 2, 3]}}' as jsonString""")
+jsonDF.select(get_json_object(col("jsonString"), "$.myJSONKey.myJSONValue[1]") as "column",json_tuple(col("jsonString"), "myJSONKey")).show(2)
+
+#You can also turn a StructType into a JSON string by using the to_json function:
+df.selectExpr("(InvoiceNo, Description) as myStruct").select(to_json(col("myStruct")))
+
+#This function also accepts a dictionary (map) of parameters that are the same as the JSON data source. You can use the from_json function to parse this (or other JSON data) back in. This naturally requires you to specify a schema, and optionally you can specify a map of options, as well:
+val parseSchema = new StructType(Array(
+new StructField("InvoiceNo",StringType,true),
+new StructField("Description",StringType,true)))
+
+df.selectExpr("(InvoiceNo, Description) as myStruct").select(to_json(col("myStruct")).alias("newJSON")).select(from_json(col("newJSON"), parseSchema), col("newJSON")).show(2)
+
+/*User Defined Functions*/
+#UDFs can take and return one or more columns as input. Spark UDFs are incredibly powerful because you can write them in several different programming languages; you do not need to create them in an esoteric format or domain-specific language. They’re just functions that operate on the data, record by record. By default, these functions are registered as temporary functions to be used in that specific SparkSession or Context. Although you can write UDFs in Scala, Python, or Java, there are performance considerations that you should be aware of. To illustrate this, we’re going to walk through exactly what happens when you create UDF, pass that into Spark, and then execute code using that UDF.
+
+#When you use the function, there are essentially two different things that occur. If the function is written in Scala or Java, you can use it within the Java Virtual Machine (JVM). This means that there will be little performance penalty aside from the fact that you can’t take advantage of code generation capabilities that Spark has for built-in functions. There can be performance issues if you create or use a lot of objects; we cover that in the section on optimization in Chapter 19. If the function is written in Python, something quite different happens. Spark starts a Python process on the worker, serializes all of the data to a format that Python can understand (remember, it was in the JVM earlier), executes the function row by row on that data in the Python process, and then finally returns the results of the row operations to the JVM and Spark. 
+
+#Starting this Python process is expensive, but the real cost is in serializing the data to Python. This is costly for two reasons: it is an expensive computation, but also, after the data enters Python, Spark cannot manage the memory of the worker. This means that you could potentially cause a worker to fail if it becomes resource constrained (because both the JVM and Python are competing for memory on the same machine). We recommend that you write your UDFs in Scala or Java—the small amount of time it should take you to write the function in Scala will always yield significant speed ups, and on top of that, you can still use the function from Python!
+
+val udfExampleDF = spark.range(5).toDF("num")
+
+def power3(number:Double):Double = number * number * number
+
+val power3udf = udf(power3(_:Double):Double)
+
+udfExampleDF.select(power3udf(col("num"))).show()
+
+#At this juncture, we can use this only as a DataFrame function. That is to say, we can’t use it within a string expression, only on an expression. However, we can also register this UDF as a Spark SQL function. This is valuable because it makes it simple to use this function within SQL as well as across languages. Let’s register the function in Scala:
+
+spark.udf.register("power3", power3(_:Double):Double)
+udfExampleDF.selectExpr("power3(num)").show(2)
+
+#Because this function is registered with Spark SQL—and we’ve learned that any Spark SQL function or expression is valid to use as an expression when working with DataFrames—we can turn around and use the UDF that we wrote in Scala, in Python. However, rather than using it as a DataFrame function, we use it as a SQL expression
+
+#As a last note, you can also use UDF/UDAF creation via a Hive syntax. To allow for this, first you must enable Hive support when they create their SparkSession (via SparkSession.builder().enableHiveSupport()). Then you can register UDFs in SQL. This is only supported with precompiled Scala and Java packages, so you’ll need to specify them as a dependency:
+-- in SQL
+
+CREATE TEMPORARY FUNCTION myFunc AS 'com.organization.hive.udf.FunctionName'
+
+#Additionally, you can register this as a permanent function in the Hive Metastore by removing TEMPORARY.
+
+/*Aggregations*/
+
+# "count" example
+#There are a number of gotchas when it comes to null values and counting. For instance, when performing a count(*), Spark will count null values (including rows containing all nulls). However, when counting an individual column, Spark will not count the null values.
+val df = spark.read.format("csv").option("header", "true").option("inferSchema", "true").load("/data/retail-data/all/*.csv").coalesce(5)
+df.cache()
+df.createOrReplaceTempView("dfTable")
+
+df.select(count("StockCode")).show()
+
+# "countDistinct" example
+#Sometimes, the total number is not relevant; rather, it’s the number of unique groups that you want. To get this number, you can use the countDistinct function. This is a bit more relevant for individual columns:
+df.select(countDistinct("StockCode")).show()
+
+# "approx_count_distinct" example
+#Often, we find ourselves working with large datasets and the exact distinct count is irrelevant. There are times when an approximation to a certain degree of accuracy will work just fine, and for that, you can use the approx_count_distinct function:
+
+#You will notice that approx_count_distinct took another parameter with which you can specify the maximum estimation error allowed. In this case, we specified a rather large error and thus receive an answer that is quite far off but does complete more quickly than countDistinct. You will see much greater performance gains with larger datasets. 
+df.select(approx_count_distinct("StockCode", 0.1)).show()
+
+# "first" and "last" example
+df.select(first("StockCode"), last("StockCode")).show()
+
+# "min" and "max" example
+df.select(min("Quantity"), max("Quantity")).show()
+
+# "sum" example
+df.select(sum("Quantity")).show()
+
+# "sumDistinct" example. In addition to summing a total, you also can sum a distinct set of values by using the sumDistinct function:
+df.select(sumDistinct("Quantity")).show()
+
+/*Aggregating to Complex Types*/
+
+#In Spark, you can perform aggregations not just of numerical values using formulas, you can also perform them on complex types. For example, we can collect a list of values present in a given column or only the unique values by collecting to a set. You can use this to carry out some more programmatic access later on in the pipeline or pass the entire collection in a user-defined function (UDF):
+
+df.agg(collect_set("Country"), collect_list("Country")).show()
+
+# "groupBy" example
+df.groupBy("InvoiceNo", "CustomerId").count().show()
+
