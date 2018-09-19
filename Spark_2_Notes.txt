@@ -817,3 +817,40 @@ flights.groupByKey(x => x.DEST_COUNTRY_NAME).count()
 
 #It should be straightfoward enough to understand that this is a more expensive process than aggregating immediately after scanning, especially because it ends up in the same end result:
 #This should motivate using Datasets only with user-defined encoding surgically and only where it makes sense. This might be at the beginning of a big data pipeline or at the end of one.
+
+/*Resilient Distributed Datasets(RDDs)*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
