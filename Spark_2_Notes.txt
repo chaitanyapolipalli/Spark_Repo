@@ -820,18 +820,104 @@ flights.groupByKey(x => x.DEST_COUNTRY_NAME).count()
 
 /*Resilient Distributed Datasets(RDDs)*/
 
+val myCollection = "Spark The Definitive Guide : Big Data Processing Made Simple".split(" ")
+val words = spark.sparkContext.parallelize(myCollection, 2)
+#Set name for RDD
+words.setName("myWords")
 
+#Get naem of RDD
+words.name
 
+#Reading data from data sources
+spark.sparkContext.textFile("/some/path/withTextFiles")
+spark.sparkContext.wholeTextFiles("/some/path/withTextFiles")
 
+#Checkpointing
+spark.sparkContext.setCheckpointDir("/some/path/for/checkpointing")
+words.checkpoint()
 
+#When we are in the key–value pair format, we can also extract the specific keys or values by using the following methods:
+keyword.keys.collect()
+keyword.values.collect()
 
+#'lookup' method example
+keyword.lookup("s")
 
+#coalesce
+Coalesce effectively collapses partitions on the same worker in order to avoid a shuffle of the data when repartitioning. For instance, our words RDD is currently two partitions, we can collapse that to one partition by using coalesce without bringing about a shuffle of the data:
+words.coalesce(1).getNumPartitions
 
+#repartition
+The repartition operation allows you to repartition your data up or down but performs a shuffle across nodes in the process. Increasing the number of partitions can increase the level of parallelism when operating in map- and filter-type operations:
+words.repartition(10)
 
+/*Distributed Shared Variables*/
 
+#Broadcast Variables
 
+val myCollection = "Spark The Definitive Guide : Big Data Processing Made Simple".split(" ")
+val words = spark.sparkContext.parallelize(myCollection, 2)
+val supplementalData = Map("Spark" -> 1000, "Definitive" -> 200,"Big" -> -300, "Simple" -> 100)
 
+val suppBroadcast = spark.sparkContext.broadcast(supplementalData)
+suppBroadcast.value
 
+words.map(word => (word, suppBroadcast.value.getOrElse(word, 0))).sortBy(wordPair => wordPair._2).collect()
+
+#Accumulators
+case class Flight(DEST_COUNTRY_NAME: String,ORIGIN_COUNTRY_NAME: String,count: BigInt)
+
+val flightsDF = spark.read.parquet("/user/chaitanyapolipalli/flight-data/parquet/2010-summary.parquet/")
+
+val flights = flightsDF.as[Flight]
+
+#Unnamed Accumulator
+import org.apache.spark.util.LongAccumulator
+val accUnnamed = new LongAccumulator
+val acc = spark.sparkContext.register(accUnnamed)
+
+#Named Accumulator
+val accChina = new LongAccumulator
+val accChina2 = spark.sparkContext.longAccumulator("China")
+spark.sparkContext.register(accChina, "China")
+
+flights.foreach(flight_row => accChinaFunc(flight_row))
+accChina.value
+
+#Custom Accumulators
+Although Spark does provide some default accumulator types, sometimes you might want to build your own custom accumulator. In order to do this you need to subclass the AccumulatorV2 class. There are several abstract methods that you need to implement, as you can see in the example that follows.
+import scala.collection.mutable.ArrayBuffer
+import org.apache.spark.util.AccumulatorV2
+val arr = ArrayBuffer[BigInt]()
+class EvenAccumulator extends AccumulatorV2[BigInt, BigInt] {
+private var num:BigInt = 0
+def reset(): Unit = {
+this.num = 0
+}
+def add(intValue: BigInt): Unit = {
+if (intValue % 2 == 0) {
+this.num += intValue
+}
+}
+def merge(other: AccumulatorV2[BigInt,BigInt]): Unit = {
+this.num += other.value
+}
+def value():BigInt = {
+this.num
+}
+def copy(): AccumulatorV2[BigInt,BigInt] = {
+new EvenAccumulator
+}
+def isZero():Boolean = {
+this.num == 0
+}
+}
+val acc = new EvenAccumulator
+val newAcc = sc.register(acc, "evenAcc")
+// in Scala
+acc.value // 0
+flights.foreach(flight_row => acc.add(flight_row.count))
+acc.value // 31390
 
 
 
