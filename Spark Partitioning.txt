@@ -1,0 +1,20 @@
+1. In HDFS each file consists of blocks. A block is usually 128MB in size (although this can be changed)
+2. In HDFS whenever you save a file, a separate file is created for each block and these files (or HDFS blocks) are usually named as part-m-0000, part-m-0001 etc. A block is usually replicated on three machines and stored. So we can regard the block as the atomic piece of a HDFS file and the block cannot be split any further, and it is stored in one node (but replicated to more than one node to address fault tolerance).
+3. So the files part-m-0000, part-m-0001 etc are nothing but blocks of an HDFS file
+4. In MapReduce world, each mapper will work on a block. 
+4. In Spark, whenever we need to process HDFS data, the driver programm will request Resource Manager to allocate executors. 
+5. The Resource Manager creates an Application Master. The Application Master will allocate executors. One Executor is allocated to work on one block of data. Again block of data is nothing but a file like part-m-0000, part-m-0001 etc. So each executor will work on one block of HDFS file by default.
+6. Each executor needs one core processor. If the number of blocks to be processed are greater than the number of available cores, then some blocks have to wait till the processing of other blocks are done. For example, if you have 100 blocks and only 40 cores, then in the first instance 40 blocks are processed, then as each core becomes free, it will work on another block.
+7. Spark will try its best to get the executors allocated with minimal data movement.
+8. So if a node has 2 blocks then it will try to get 2 executors allocated on that node. But if the node is busy running other executors or doing some other activity, then it will get the executor allocated where ever the block replica is available for processing. But in some instances the nodes (multiple nodes since block is replicated) containing the block are all busy. In that situation the block is copied to a nearest available node to perform the processing. (I over simplified this, but internally Application Master will allocate the node for processing, and Spark will work with Application Master to get the processing resources allocated)
+9. The above explained process is the default activity of spark. But sometimes we can request Spark to use a predefined number of partitions while reading the HDFS file to RDD. In such cases, Spark may need to copy the data across machines to processing nodes memory. For example if we have 10 blocks of data to be processed, but we asked Spark to use 4 partitions only, then spark has to re-distribute the data to executors to make the 10 blocks of data as 4 blocks, so that 4 partitions are obtained (and hence 4 executors will work to process the data). Again Spark will try its best to avoid the shuffle. So if those 10 blocks are stored in 2 nodes with 5 blocks each, then spark will try to combine the data without reshuffle (but there is an exception. If the reshuffle is needed for group by kind of operation, then this may not be possible)
+10. Spark perform partitioning during the following instances:
+    a. When we read the HDFS data uses default number of partitions based on the number of files (named as part-0000 etc) or based on the number of partitions requested
+    b. When the user calls repartition or coalesce on RDD
+    c. When spark optimizes query using Catalyst optimizer
+    d. When we need to perform wide dependency operations such as groupby etc
+11. So in summary:
+    a. A single block (or files like part-m-000 etc) are processed by one executor
+    b. Very large (blocks) files can be further split if cannot be accommodated in memory. Remember HDFS files can have a greater block size like 1GB (if the user explicitly requests for larger block size)
+    c. If you are using Data Frames, then you cannot control partitioning, and catalyst optimizer determines optimal number of partitions for the underlying RDDs
+    
